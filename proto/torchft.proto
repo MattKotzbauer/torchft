@@ -54,6 +54,7 @@ message Quorum {
 
 message LighthouseQuorumRequest {
     QuorumMember requester = 1;
+    string room_id = 2;
 }
 
 message LighthouseQuorumResponse {
@@ -62,6 +63,7 @@ message LighthouseQuorumResponse {
 
 message LighthouseHeartbeatRequest {
     string replica_id = 1;
+    string room_id = 2;
 }
 
 message LighthouseHeartbeatResponse {}

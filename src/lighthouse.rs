@@ -58,7 +58,8 @@ struct State {
 }
 
 pub struct Lighthouse {
-    state: Mutex<State>,
+    // state: Mutex<State>,
+    rooms: Mutex<HashMap<String, State>>,
     opt: LighthouseOpt,
     listener: Mutex<Option<tokio::net::TcpListener>>,
     local_addr: SocketAddr,
@@ -266,19 +267,37 @@ impl Lighthouse {
 
         let (tx, _) = broadcast::channel(16);
 
+	let default_state = State {
+            participants: HashMap::new(),
+            channel: tx,
+            prev_quorum: None,
+            quorum_id: 0,
+            heartbeats: HashMap::new(),
+	};
+	
+	let mut rooms = HashMap::new();
+	rooms.insert("default".to_string(), default_state);
+
         Ok(Arc::new(Self {
-            state: Mutex::new(State {
-                participants: HashMap::new(),
-                channel: tx,
-                prev_quorum: None,
-                quorum_id: 0,
-                heartbeats: HashMap::new(),
-            }),
-            opt: opt,
-            local_addr: listener.local_addr()?,
-            listener: Mutex::new(Some(listener)),
-            change_logger: ChangeLogger::new(),
-        }))
+        rooms: Mutex::new(rooms),
+        opt,
+        local_addr: listener.local_addr()?,
+        listener: Mutex::new(Some(listener)),
+        change_logger: ChangeLogger::new(),
+	}))
+	    
+    }
+
+    async fn room_state<'a>(
+        &'a self,
+        room_id: &str,
+    ) -> tokio::sync::MutexGuard<'a, State> {
+        let mut rooms = self.rooms.lock().await;
+        // Insert a fresh State only if this is the first request for the room.
+        rooms
+            .entry(room_id.to_string())
+            .or_insert_with(State::new)
+            .into()
     }
 
     fn _quorum_tick(self: Arc<Self>, state: &mut State) -> Result<()> {
