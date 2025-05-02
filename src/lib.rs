@@ -35,7 +35,8 @@ pub mod torchftpb {
 use crate::torchftpb::lighthouse_service_client::LighthouseServiceClient;
 use crate::torchftpb::manager_service_client::ManagerServiceClient;
 use crate::torchftpb::{
-    CheckpointMetadataRequest, LighthouseQuorumRequest, ManagerQuorumRequest, ShouldCommitRequest,
+    CheckpointMetadataRequest, LighthouseHeartbeatRequest, LighthouseQuorumRequest,
+    ManagerQuorumRequest, ShouldCommitRequest,
 };
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
@@ -176,6 +177,7 @@ impl ManagerClient {
         checkpoint_metadata: String,
         shrink_only: bool,
         init_sync: bool,
+        commit_failures: i64,
         timeout: Duration,
     ) -> Result<QuorumResult, StatusError> {
         py.allow_threads(move || {
@@ -185,6 +187,7 @@ impl ManagerClient {
                 checkpoint_metadata: checkpoint_metadata,
                 shrink_only: shrink_only,
                 init_sync: init_sync,
+                commit_failures: commit_failures,
             });
 
             // This timeout is processed on the server side so we also enable
@@ -546,6 +549,7 @@ impl LighthouseClient {
                     world_size: world_size,
                     shrink_only: shrink_only,
                     data: data_string,
+                    commit_failures: 0,
                 }),
             });
 
@@ -561,6 +565,26 @@ impl LighthouseClient {
             Ok(quorum)
         });
         Ok(convert_quorum(py, &quorum?)?)
+    }
+
+    /// Send a single heartbeat to the lighthouse.
+    ///
+    /// Args:
+    ///     replica_id (str):  The replica_id you registered with.
+    ///     timeout      (timedelta, optional):  Per-RPC deadline.  Default = 5 s.
+    #[pyo3(signature = (replica_id, timeout = Duration::from_secs(5)))]
+    fn heartbeat(
+        &self,
+        py: Python<'_>,
+        replica_id: String,
+        timeout: Duration,
+    ) -> Result<(), StatusError> {
+        py.allow_threads(move || {
+            let mut req = tonic::Request::new(LighthouseHeartbeatRequest { replica_id });
+            req.set_timeout(timeout);
+            self.runtime.block_on(self.client.clone().heartbeat(req))?;
+            Ok(())
+        })
     }
 }
 
@@ -677,11 +701,17 @@ fn setup_logging() -> Result<(), Box<dyn std::error::Error>> {
         .debug(Color::Blue)
         .trace(Color::Magenta);
     let level_filter = match env::var("RUST_LOG").as_deref() {
-        Ok("error") => LevelFilter::Error,
-        Ok("warn") => LevelFilter::Warn,
-        Ok("info") => LevelFilter::Info,
-        Ok("debug") => LevelFilter::Debug,
-        Ok("trace") => LevelFilter::Trace,
+        Ok(value) => {
+            let value_lower = value.to_lowercase();
+            match value_lower.as_str() {
+                "error" => LevelFilter::Error,
+                "warn" => LevelFilter::Warn,
+                "info" => LevelFilter::Info,
+                "debug" => LevelFilter::Debug,
+                "trace" => LevelFilter::Trace,
+                _ => LevelFilter::Info,
+            }
+        }
         _ => LevelFilter::Info,
     };
     fern::Dispatch::new()
